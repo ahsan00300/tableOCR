@@ -1,16 +1,48 @@
 import cv2
-import pytesseract
 from ultralytics import YOLO
 from ultralyticsplus import YOLO, render_result
-import easyocr
 import numpy as np
+
+from tqdm import tqdm
+import easyocr
+from pdf2image import convert_from_path
+
+reader = easyocr.Reader(['th','en'])
 
 class ocr_table:
 
     def __init__(self):
         pass
 
-    def extract_table(self, image_path):
+    def pdf_to_images(self, pdf_path, output_folder=None):
+        """
+        Converts a PDF into a list of images (one per page).
+
+        Args:
+            pdf_path (str): Path to the input PDF file.
+            output_folder (str, optional): Directory where images will be saved (optional).
+
+        Returns:
+            list: A list of PIL Image objects representing PDF pages.
+        """
+        try:
+            # Convert PDF pages to images
+            images = convert_from_path(pdf_path)
+            images = [np.array(image) for image in images]
+            # # Save images to an output folder if provided
+            # if output_folder:
+            #     os.makedirs(output_folder, exist_ok=True)
+            #     for i, img in enumerate(images):
+            #         image_path = os.path.join(output_folder, f"page_{i + 1}.png")
+            #         img.save(image_path, "PNG")
+            
+            return images
+        
+        except Exception as e:
+            print(f"Error while processing PDF: {e}")
+            return []
+
+    def extract_table(self, image):
 
         # load model
         model = YOLO('foduucom/table-detection-and-extraction')
@@ -22,9 +54,9 @@ class ocr_table:
         model.overrides['max_det'] = 1000  # maximum number of detections per image
 
         # perform inference
-        results = model.predict(image_path)
+        results = model.predict(image)
 
-        image = cv2.imread(image_path)
+        # image = cv2.imread(image)
 
         # table_coords = results[0].boxes
         table_coords = results[0].boxes.xyxy.numpy()  # Convert boxes to NumPy array
@@ -35,111 +67,103 @@ class ocr_table:
         table_img = image[y1:y2, x1:x2]
         return table_img
 
-
-    def rows_count(self, image):
-        # Initialize EasyOCR Reader
-        reader = easyocr.Reader(['en'])  # English language
-        
-        # Load the image
-        # image = cv2.imread(image_path)
-        if image is None:
-            print("Error: Could not read image. Check the file path.")
-            return []
-
-        # Preprocess the image
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
-        # Resize the image for better OCR accuracy
-        scale_percent = 200  # Increase size by 200%
-        width = int(gray.shape[1] * scale_percent / 100)
-        height = int(gray.shape[0] * scale_percent / 100)
-        resized_gray = cv2.resize(gray, (width, height), interpolation=cv2.INTER_CUBIC)
-
-        # Apply thresholding
-        _, thresh = cv2.threshold(resized_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
-        # Find horizontal lines (table rows)
-        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
-        detect_horizontal = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
-        
-        contours, _ = cv2.findContours(detect_horizontal, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        contours = sorted(contours, key=lambda ctr: cv2.boundingRect(ctr)[1])  # Sort rows top-to-bottom
-
-        return len(contours) - 1
-
     def list_to_dict(self, table_data):
         # Extract the column names from the first row
-        column_names = table_data[0]
 
         # Create a list of dictionaries, each representing a row
         table_dicts = []
+
+        if len(table_data) < 2:
+            return table_dicts
+
+        first_row = table_data[0]
         for row in table_data[1:]:  # Skip the first row as it contains column names
-            row_dict = {column_names[i]: row[i] for i in range(len(column_names))}
+
+            row_dict = {}
+            for i in range(len(row)):
+                row_dict[first_row[i]] = row[i]
+                
             table_dicts.append(row_dict)
 
         return table_dicts
-        
-    def extract_table_easyocr(self, image):
 
-        total_rows = self.rows_count(image)    
-        reader = easyocr.Reader(['en'])  # English language
-        
-        # Load the image
-        # image = cv2.imread(image_path)
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    def table_detection(self, img):
+        # img = cv2.imread(img_path)
+        img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        (thresh, img_bin) = cv2.threshold(img_gray, 128, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+        img_bin = cv2.bitwise_not(img_bin)
 
-        if image is None:
-            print("Error: Could not read image. Check the file path.")
-            return []
-        
-        # Resize the image for better OCR accuracy
-        scale_percent = 200  # Increase size by 200%
-        width = int(gray.shape[1] * scale_percent / 100)
-        height = int(gray.shape[0] * scale_percent / 100)
-        resized_gray = cv2.resize(gray, (width, height), interpolation=cv2.INTER_CUBIC)
+        kernel_length_v = (np.array(img_gray).shape[1])//120
+        vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, kernel_length_v))
+        im_temp1 = cv2.erode(img_bin, vertical_kernel, iterations=3)
+        vertical_lines_img = cv2.dilate(im_temp1, vertical_kernel, iterations=3)
 
-        # Apply thresholding
-        _, thresh = cv2.threshold(resized_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        kernel_length_h = (np.array(img_gray).shape[1])//40
+        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_length_h, 1))
+        im_temp2 = cv2.erode(img_bin, horizontal_kernel, iterations=3)
+        horizontal_lines_img = cv2.dilate(im_temp2, horizontal_kernel, iterations=3)
 
-        # Debugging step: Save intermediate processed image
-        cv2.imwrite("processed_image.png", thresh)
-        # print("Processed image saved for verification: 'processed_image.png'")
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        table_segment = cv2.addWeighted(vertical_lines_img, 0.5, horizontal_lines_img, 0.5, 0.0)
+        table_segment = cv2.erode(cv2.bitwise_not(table_segment), kernel, iterations=2)
+        thresh, table_segment = cv2.threshold(table_segment, 0, 255, cv2.THRESH_OTSU)
 
-        # Find contours to detect rows
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        contours = sorted(contours, key=lambda ctr: cv2.boundingRect(ctr)[1])  # Sort top-to-bottom
+        contours, hierarchy = cv2.findContours(table_segment, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        count = 0
 
-        print(f"Number of detected contours (rows): {len(contours)}")
-        if not contours:
-            print("Error: No contours (rows) detected in the image.")
-            return []
+        full_list=[]
+        row=[]
+        data=[]
+        first_iter=0
+        firsty=-1
 
-        rows_data = []  # List to store row-wise text
+        print ("extracting data")
+        for c in tqdm(contours):
+            x, y, w, h = cv2.boundingRect(c)
 
-        # Loop through each detected row and perform OCR
-        for i, ctr in enumerate(contours):
-            x, y, w, h = cv2.boundingRect(ctr)
+            # if  h > 9 and h<100:
+            if first_iter==0:
+                first_iter=1
+                firsty=y
+            if firsty!=y:
+                row.reverse()
+                full_list.append(row)
+                row=[]
+                data=[]
+            # print(x,y,w,h)
+            cropped = img[y:y + h, x:x + w]
+            # plt.imshow(cropped)
+            bounds = reader.readtext(cropped)
 
-            row_image = resized_gray[y:y+h, x:x+w]  # Crop the row
-            # Perform OCR on the row
-            result = reader.readtext(row_image, detail=0)  # Only text, no bounding boxes
-            # print(f"OCR result for row {i}: {result}")
+            try:
+                data.append(bounds[0][1])
+                data.append(w)
+                row.append(data)
+                data=[]
+            except:
+                data.append("")
+                data.append(w)
+                row.append(data)
+                data=[]
+            firsty=y
+            # cv2.rectangle(img,(x, y),(x + w, y + h),(0, 255, 0), 2)
+            # plt.imshow(img)
+        full_list.reverse()
 
-            if result:  # Append non-empty rows
-                rows_data.append(result)
+        new_data=[]
+        new_row=[]
+        for i in full_list:
+            for j in i:
+                new_row.append(j[0])
+            new_data.append(new_row)
+            new_row=[]
 
-        rows = total_rows
-        columns = int(len(rows_data[0])/total_rows)
-
-        print ("-- rows_data --")
-        print (rows_data)
-        print ("-- rows_data --")
-
-        data = np.array(rows_data[0])
-        data = data.reshape(rows, columns)
-        data = self.list_to_dict(data)
-        
-        return data
+        print("-- new_data 1--")
+        print(new_data)
+        new_data = self.list_to_dict(new_data)
+        print("-- new_data 2--")
+        print(new_data)
+        return new_data
 
 # path = "/home/ahsan/Downloads/table.png"
 # image = extract_table(path)

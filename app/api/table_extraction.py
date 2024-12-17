@@ -11,6 +11,8 @@ ocr_blueprint = Blueprint('upload', __name__)
 
 @ocr_blueprint.route('/upload', methods=['POST'])
 def upload_file():
+
+    return_list = []
     if 'file' not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
@@ -23,9 +25,18 @@ def upload_file():
 
         # path = "/home/ahsan/Downloads/table.png"
         ocr_obj = ocr_table()
-        image = ocr_obj.extract_table(filepath)
-        table_data = ocr_obj.extract_table_easyocr(image)
+
+        pdf_pages = ocr_obj.pdf_to_images(filepath)
+
+        for pdf_page in pdf_pages:
+            image = ocr_obj.extract_table(pdf_page)
+            if len(image) > 0:
+                table_data = ocr_obj.table_detection(image)
+                return_list = table_data
+                break
         
-        return jsonify(table_data)
+        print ("-- return_list --")
+        print (return_list)
+        return return_list
     except Exception as e:
         return jsonify({"error": str(e)}), 500
