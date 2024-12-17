@@ -1,1 +1,2 @@
-# tableOCR
+# libby-scrapper
+Libby AI Scrapper
