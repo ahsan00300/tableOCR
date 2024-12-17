@@ -1,5 +1,6 @@
 ultralyticsplus==0.0.28 
 ultralytics==8.0.43
 pytesseract==0.3.13
-tableocr
 pdf2image
+easyocr
+flask
